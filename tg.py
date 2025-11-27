@@ -16,11 +16,12 @@ logging.basicConfig(
 )
 
 from telethon import TelegramClient
+from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
 from telethon.errors import ChatIdInvalidError
 
 # -------------------- 配置 --------------------
-api_id = 22762141
-api_hash = '7e8be8f925116c3f401c6f272410ad15'
+api_id = 123456
+api_hash = '7e8be8f925116c3f401'
 
 # 移除了全局的 TARGET_CHAT_ID，改为在每个接口中作为参数传入
 
@@ -222,18 +223,66 @@ async def _upload_and_respond(file_path: str, file_name: str, caption: str, chat
         eta_sec = int(total_time % 60)
         print(f"\n上传完成！总耗时: {eta_min:02d}:{eta_sec:02d}")
 
-        doc = message.media.document
-        return JSONResponse({
+#        doc = message.media.document
+#        return JSONResponse({
+#            "success": True,
+#            "message": f"文件已成功上传到 {chat_id}",
+#            "uploaded_to_chat_id": str(chat_id),  # 返回实际上传到的 chat_id
+#            "file_id": str(doc.id),
+#            "access_hash": str(doc.access_hash),
+#            "file_name": file_name,
+#            "size_mb": round(doc.size / 1024 / 1024, 2),
+#            "message_id": message.id,
+#        })
+        if isinstance(message.media, MessageMediaDocument):
+            # 处理文档（视频、文件等）
+            doc = message.media.document
+            response_data = {
+                "type": "document",
+                "file_id": str(doc.id),
+                "access_hash": str(doc.access_hash),
+                "file_name": getattr(doc, 'file_name', file_name),  # 文档通常有 file_name 属性
+                "size_mb": round(doc.size / 1024 / 1024, 2),
+                "mime_type": getattr(doc, 'mime_type', 'unknown'),
+            }
+        elif isinstance(message.media, MessageMediaPhoto):
+            # 处理图片
+            photo = message.media.photo
+            # 安全地查找有尺寸信息的图片对象
+            valid_sizes = [size for size in photo.sizes if hasattr(size, 'w') and hasattr(size, 'h')]
+
+            if valid_sizes:
+                # 如果找到了有尺寸的图片，就找其中最大的
+                largest_size = max(valid_sizes, key=lambda s: s.w * s.h)
+                # 从最大的尺寸对象中获取文件大小（字节），并转换为 KB
+                size_kb = round(largest_size.size / 1024, 2)
+            else:
+                # 如果所有尺寸都没有尺寸信息，则尝试从第一个尺寸获取大小
+                if photo.sizes:
+                    size_kb = round(photo.sizes[0].size / 1024, 2)
+                else:
+                    size_kb = 'N/A'
+            response_data = {
+                "type": "photo",
+                "photo_id": str(photo.id),
+                "access_hash": str(photo.access_hash),
+                "size_kb": size_kb,
+            }
+        else:
+            # 处理其他可能的情况（比如纯文本消息，虽然这里不会发生）
+            response_data = {"type": "other", "info": "非媒体消息"}
+
+        # 将通用的响应数据与特定数据合并
+        final_response = {
             "success": True,
             "message": f"文件已成功上传到 {chat_id}",
-            "uploaded_to_chat_id": str(chat_id),  # 返回实际上传到的 chat_id
-            "file_id": str(doc.id),
-            "access_hash": str(doc.access_hash),
-            "file_name": file_name,
-            "size_mb": round(doc.size / 1024 / 1024, 2),
+            "uploaded_to_chat_id": str(chat_id),
             "message_id": message.id,
-        })
+            "date": message.date.isoformat(),
+        }
+        final_response.update(response_data)
 
+        return JSONResponse(final_response)
     except ValueError as e:
         # 当 get_input_entity 找不到 chat_id 时会抛出 ValueError
         raise HTTPException(status_code=400, detail=f"无效的 Chat ID '{chat_id}': {str(e)}")
@@ -258,4 +307,5 @@ async def main():
 
 if __name__ == '__main__':
     client.loop.run_until_complete(main())
+
 ##pip install telethon fastapi uvicorn[standard] python-dotenv loguru python-multipart  ffmpeg-python cryptg pillow aiohttp hachoir
